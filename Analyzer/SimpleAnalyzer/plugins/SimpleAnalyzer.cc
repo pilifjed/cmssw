@@ -68,13 +68,17 @@ class SimpleAnalyzer : public edm::one::EDAnalyzer<edm::one::SharedResources>  {
       edm::EDGetTokenT< edm::DetSetVector<TotemTimingDigi> > tokenDigi_;
       edm::EDGetTokenT< edm::DetSetVector<TotemTimingRecHit> > tokenRecHit_;
 
+
+      //----------- dependencies----------------------------
+      std::map<TotemTimingDetId, std::vector<TotemTimingDetId>> substr_map_;
+
       // ---------- directories ---------------------------
       std::map< TotemTimingDetId, TFileDirectory > maindir_map_;
 
       // ---------- histograms ---------------------------
       std::map< TotemTimingDetId, TH1F*> yHisto_map_;
       std::map< TotemTimingDetId, TH1F*> tHisto_map_;
-      std::map< std::string, TH1F*> tDiffHisto_map_;
+      std::map< std::pair<TotemTimingDetId, TotemTimingDetId>, TH1F*> tDiffHisto_map_;
 
       TH1F* tHisto_tot_;
 
@@ -263,12 +267,18 @@ SimpleAnalyzer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
             detId1.planeName(pl1Name, TotemTimingDetId::nFull);
             detId2.planeName(pl2Name, TotemTimingDetId::nFull);
             std::string tDiffHisto_name( pl1Name + "-" + pl2Name);
-            if(maindir_map_.find(detId1.getPlaneId()) == maindir_map_.end())
-              maindir_map_[detId1.getPlaneId()] = fs->mkdir(pl1Name);
-            if(tDiffHisto_map_.find(tDiffHisto_name) == tDiffHisto_map_.end())
-              tDiffHisto_map_[tDiffHisto_name] = maindir_map_[detId1.getPlaneId()].make<TH1F>(tDiffHisto_name.c_str(), tDiffHisto_name.c_str(), 100, -20, 20 );
+            if(maindir_map_.find(detId2.getPlaneId()) == maindir_map_.end())
+              maindir_map_[detId2.getPlaneId()] = fs->mkdir("-"+ pl2Name);
+            if(tDiffHisto_map_.find(std::make_pair(detId1.getPlaneId(), detId2.getPlaneId())) == tDiffHisto_map_.end()){
+              tDiffHisto_map_[std::make_pair(detId1.getPlaneId(), detId2.getPlaneId())] = maindir_map_[detId2.getPlaneId()].make<TH1F>(tDiffHisto_name.c_str(), tDiffHisto_name.c_str(), 100, -20, 20 );
+              if(substr_map_.find(detId2.getPlaneId()) == substr_map_.end()){
+                std::vector<TotemTimingDetId> a;
+                substr_map_[detId2.getPlaneId()] = a;
+              }
+              substr_map_[detId2.getPlaneId()].push_back(detId1.getPlaneId());
+            }
             for (const auto& recHit2 : recHits2 ){
-              tDiffHisto_map_[tDiffHisto_name]->Fill(recHit2.getT() - recHit.getT());
+              tDiffHisto_map_[std::make_pair(detId1.getPlaneId(), detId2.getPlaneId())]->Fill(recHit.getT() - recHit2.getT());
             }
           }
         }
@@ -291,48 +301,20 @@ SimpleAnalyzer::beginJob()
 // ------------ method called once each job just after ending the event loop  ------------
 void
 SimpleAnalyzer::endJob(){
-  std::ofstream log_file;
-  log_file.open("log_withcal.csv", std::ofstream::out | std::ofstream::trunc);
-  log_file << "db, UFSD plane, UFSD channel, time_offset, time_precision (w.c)\n";
-
-  std::string file_name = "RecoCTPPS/TotemRPLocal/calib/correct_offsets.cal.json"; //set it in cmssw
-  pt::ptree node;
-  pt::read_json(file_name, node);
-  for (auto &hist : tHisto_map_){
-    int db = detId_calFileId_map_[hist.first].db;
-    int sampic = detId_calFileId_map_[hist.first].sampic;
-    int channel = detId_calFileId_map_[hist.first].channel;
-    ct = 0;
-    for(pt::ptree::value_type &par : node.get_child("parameters."+ std::to_string(db))){
-      if( ct == 16*(1-sampic)+channel){ //very ugly but works for now
-        double old_time_offset = par.second.get<double>("time_offset");
-        double new_time_offset = old_time_offset - hist.second->GetMean();
-        double new_time_precision = hist.second->GetRMS();
-        par.second.put<double>("time_offset",new_time_offset);
-        par.second.put<double>("time_precision",new_time_precision);
-        log_file << db << ", " << hist.first.plane() << ", " << hist.first.channel() << ", " << new_time_offset << ", " << new_time_precision << "\n";
-        break;
-      }
-      ct++;
+  for(const auto& substrahend : substr_map_){
+    std::cout << substrahend.first;
+    std::string samples_graph_name;
+    substrahend.first.planeName(samples_graph_name, TotemTimingDetId::nFull);
+    TGraph *graph_hndl = maindir_map_[substrahend.first].make<TGraph>();
+    graph_hndl->SetName(samples_graph_name.c_str());
+    graph_hndl->SetTitle(samples_graph_name.c_str());
+    //create scatter plot in maindir_map_
+    for(const auto& minuend : substrahend.second){
+      graph_hndl->SetPoint(minuend.plane(), minuend.plane(), tDiffHisto_map_[std::make_pair(minuend, substrahend.first)]->GetRMS());
+      std::cout  << " - "<< minuend;
     }
-  //  query(node, path + ".time_offset").put_value<double>(new_time_offset);
-  //  query(node, path + ".time_precision").put_value<double>(new_time_precision);
-    // node.put<double>(path + ".time_offset",new_time_offset);
-    // node.put<double>(path + ".time_precision",new_time_precision);
-    /*std::cout << hist.second->GetMean() << ", "
-              << hist.second->GetRMS() << "\n";*/
+    std::cout << "\n";
   }
-  log_file.close();
-  pt::write_json("RecoCTPPS/TotemRPLocal/calib/correct_offsets2.cal.json", node);
-  // for (auto &hist : tDiffHisto_map_){
-  //   TotemTimingDetId detId = hist.first;
-  //   TotemTimingDetId detId1 = TotemTimingDetId(detId.arm(), detId.station(), detId.rp(), detId.plane()+1, detId.channel());
-  //   TH1F *hSub = hist.second;
-  //   TH1F *h = tHisto_map_[detId];
-  //   TH1F *h1 = tHisto_map_[detId1];
-  //   double beam = (h->GetRMS()*h->GetRMS() + h1->GetRMS()*h1->GetRMS() - hSub->GetRMS()*hSub->GetRMS())/2;
-  //   std::cout << beam << "\n";
-  // }
 }
 
 // ------------ method fills 'descriptions' with the allowed parameters for the module  ------------
