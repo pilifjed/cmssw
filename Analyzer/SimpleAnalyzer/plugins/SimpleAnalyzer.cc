@@ -74,7 +74,7 @@ class SimpleAnalyzer : public edm::one::EDAnalyzer<edm::one::SharedResources>  {
       // ---------- histograms ---------------------------
       std::map< TotemTimingDetId, TH1F*> yHisto_map_;
       std::map< TotemTimingDetId, TH1F*> tHisto_map_;
-      std::map< TotemTimingDetId, TH1F*> tDiffHisto_map_;
+      std::map< std::string, TH1F*> tDiffHisto_map_;
 
       TH1F* tHisto_tot_;
 
@@ -166,7 +166,11 @@ SimpleAnalyzer::initHistograms(const TotemTimingDetId& detId)
     std::string tHisto_name(chName);
     tHisto_name.insert(0, "tDistribution_");
     tHisto_map_[ detId ] = maindir_map_[ detId ].make<TH1F>(tHisto_name.c_str(), tHisto_name.c_str(), 100, -4, 4); //-4 4
-    // std::string tDiffHisto_name(chName);
+
+
+    // std::string plName;
+    // detId.planeName(plName, TotemTimingDetId::nFull);
+    // std::string tDiffHisto_name(plName);
     // tDiffHisto_name.insert(0, "tDiffWithPl+1_");
     // tDiffHisto_map_[ detId ] = maindir_map_[ detId ].make<TH1F>(tDiffHisto_name.c_str(), tDiffHisto_name.c_str(), 100, -20, 20 ); //-2 2
 
@@ -179,7 +183,7 @@ void
 SimpleAnalyzer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 {
   using namespace edm;
-
+  edm::Service<TFileService> fs;
   edm::Handle< edm::DetSetVector<TotemTimingDigi> > timingDigi;
   edm::Handle< edm::DetSetVector<TotemTimingRecHit> > timingRecHit;
   iEvent.getByToken( tokenDigi_, timingDigi );
@@ -234,40 +238,41 @@ SimpleAnalyzer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
     }
   }
 
-  for (const auto& recHits : *timingRecHit)
-  {
-    const TotemTimingDetId detId( recHits.detId() );
-    initHistograms( detId );
-    for (const auto& recHit : recHits )
-    {
-      // Do stuff on recHits
-      //yHisto_map_[ detId ]->Fill( recHit.getY() );
-      tHisto_map_[ detId ]->Fill( recHit.getT() );
-      tHisto_tot_->Fill( recHit.getT() );
-      //std::cout << recHit.getT() << "\n";
+  std::map< TotemTimingDetId, bool> onehit;
 
-      /*for (const auto& recHits2 : *timingRecHit){
-        const TotemTimingDetId detId2( recHits2.detId() );
-        if  ((detId.arm() == detId2.arm()) &&
-            (detId.station() == detId2.station()) &&
-            (detId.rp() == detId2.rp()) &&
-            (detId.channel() == detId2.channel()) &&
-            (detId.plane()+1== detId2.plane()))
-          for (const auto& recHit2 : recHits2 ){
-            tDiffHisto_map_[detId]->Fill(recHit2.getT() - recHit.getT());
+
+  for (const auto& recHits : *timingRecHit){
+    const TotemTimingDetId planeId(recHits.detId());
+    if(onehit.find(planeId.getPlaneId()) == onehit.end())
+      onehit[planeId.getPlaneId()]=true;
+    else
+      onehit[planeId.getPlaneId()]=false;
+  }
+  for (const auto& recHits : *timingRecHit){
+    for (const auto& recHit : recHits ){
+      const TotemTimingDetId detId1(recHits.detId());
+      if(onehit[detId1.getPlaneId()]){
+        for (const auto& recHits2 : *timingRecHit){
+          const TotemTimingDetId detId2( recHits2.detId());
+          if  (onehit[detId2.getPlaneId()] &&
+              (detId1.arm() == detId2.arm()) &&
+              (detId1.station() == detId2.station()) &&
+              (detId1.rp() == detId2.rp()) &&
+              (detId1.plane()!= detId2.plane())){
+            std::string pl1Name, pl2Name;
+            detId1.planeName(pl1Name, TotemTimingDetId::nFull);
+            detId2.planeName(pl2Name, TotemTimingDetId::nFull);
+            std::string tDiffHisto_name( pl1Name + "-" + pl2Name);
+            if(maindir_map_.find(detId1.getPlaneId()) == maindir_map_.end())
+              maindir_map_[detId1.getPlaneId()] = fs->mkdir(pl1Name);
+            if(tDiffHisto_map_.find(tDiffHisto_name) == tDiffHisto_map_.end())
+              tDiffHisto_map_[tDiffHisto_name] = maindir_map_[detId1.getPlaneId()].make<TH1F>(tDiffHisto_name.c_str(), tDiffHisto_name.c_str(), 100, -20, 20 );
+            for (const auto& recHit2 : recHits2 ){
+              tDiffHisto_map_[tDiffHisto_name]->Fill(recHit2.getT() - recHit.getT());
+            }
           }
-      }*/
-      // for (const auto& recHits2 : *timingRecHit){ nicolastuff
-      //   const TotemTimingDetId detId2( recHits2.detId() );
-      //   if  ((detId.arm() != detId2.arm()) &&
-      //       (detId.station() == detId2.station()) &&
-      //       (detId.rp() != detId2.rp()) &&
-      //       (detId.channel() == detId2.channel()) &&
-      //       (detId.plane()== detId2.plane()))
-      //     for (const auto& recHit2 : recHits2 ){
-      //       tDiff_45_56_Histo_map_[detId]->Fill(recHit2.getT() - recHit.getT());
-      //     }
-      // } nicolastuff
+        }
+      }
     }
   }
 }
